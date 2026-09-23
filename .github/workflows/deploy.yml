@@ -16,7 +16,39 @@ jobs:
           sudo mkdir -p /var/www/instar
           sudo cp -r dist/* /var/www/instar/
           sudo chmod -R 755 /var/www/instar/
-      - name: Nginx and Backend
+      - name: Fix Backend 502
+        run: |
+          # 백엔드 의존성 설치 (없으면 502)
+          if [ -f backend/requirements.txt ]; then
+            pip3 install -r backend/requirements.txt || pip install -r backend/requirements.txt || true
+          fi
+          if [ -f requirements.txt ]; then
+            pip3 install -r requirements.txt || true
+          fi
+          # 서비스 파일이 없거나 잘못됐으면 재생성
+          if [! -f /etc/systemd/system/instadesk.service ]; then
+            sudo tee /etc/systemd/system/instadesk.service > /dev/null <<'SERVICE'
+          [Unit]
+          Description=InstaDesk Backend
+          After=network.target
+          [Service]
+          WorkingDirectory=/home/runner/actions-runner/_work/instadesk/instadesk/backend
+          ExecStart=/usr/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 8000
+          Restart=always
+          User=root
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE
+          fi
+          sudo systemctl daemon-reload
+          sudo systemctl enable instadesk || true
+          sudo systemctl restart instadesk
+          sleep 3
+          sudo systemctl status instadesk --no-pager || true
+          sudo journalctl -u instadesk -n 100 --no-pager || true
+          curl -s http://127.0.0.1:8000/ || echo "backend still down"
+          curl -k -s https://instar.xrocket.kr/api || echo "api still 502"
+      - name: Nginx
         run: |
           sudo tee /etc/nginx/sites-available/instar.xrocket.kr > /dev/null <<'NGINX'
           server {
@@ -47,6 +79,4 @@ jobs:
           sudo ln -sf /etc/nginx/sites-available/instar.xrocket.kr /etc/nginx/sites-enabled/instar.xrocket.kr
           sudo nginx -t
           sudo systemctl reload nginx
-          sudo systemctl restart instadesk
-          sleep 2
           echo "DEPLOY DONE"
