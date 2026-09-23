@@ -16,7 +16,7 @@ jobs:
           sudo mkdir -p /var/www/instar
           sudo cp -r dist/* /var/www/instar/
           sudo chmod -R 755 /var/www/instar/
-      - name: Overwrite Nginx Config FINAL
+      - name: Overwrite Nginx Config - FIX SLASH BUG
         run: |
           sudo tee /etc/nginx/sites-available/instar.xrocket.kr > /dev/null <<'NGINX'
           server {
@@ -31,8 +31,8 @@ jobs:
               ssl_certificate_key /etc/letsencrypt/live/instar.xrocket.kr/privkey.pem;
               root /var/www/instar;
               index index.html;
-              location /api/ {
-                  rewrite ^/api/(.*)$ /$1 break;
+              location /api {
+                  rewrite ^/api/?(.*)$ /$1 break;
                   proxy_pass http://127.0.0.1:8000;
                   proxy_set_header Host $host;
                   proxy_set_header X-Real-IP $remote_addr;
@@ -46,10 +46,16 @@ jobs:
           NGINX
           sudo nginx -t
           sudo systemctl reload nginx
+          echo "--- direct ---"
           curl -s http://127.0.0.1:8000/ || true
+          echo ""
+          echo "--- /api ---"
+          curl -k -s https://instar.xrocket.kr/api || true
+          echo ""
+          echo "--- /api/ ---"
           curl -k -s https://instar.xrocket.kr/api/ || true
+          echo ""
       - name: Restart Backend
         run: |
           sudo systemctl restart instadesk || true
-          sleep 3
-          curl -s http://127.0.0.1:8000/ || true
+          sleep 2
