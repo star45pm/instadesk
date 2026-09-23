@@ -1,63 +1,49 @@
 name: STAR45 Deploy - InstaDesk
-
 on:
   push:
     branches: [main]
   workflow_dispatch:
-
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Fix backend structure
-        run: |
-          mkdir -p backend
-          ls -la
-
+      - uses: actions/checkout@v4
       - name: Build and Deploy
         run: |
           set -e
-          echo "=== Install deps ==="
-          if [ -f "backend/requirements.txt" ]; then pip3 install -r backend/requirements.txt || true; fi
-          if [ -f "requirements.txt" ]; then pip3 install -r requirements.txt || true; fi
-          if [ -f "package.json" ]; then npm install || true; npm run build || true; fi
+          echo "=== FIND MAIN FILE ==="
+          MAIN_FILE=$(find. -maxdepth 3 -type f -name "main.py" -o -name "app.py" | head -1)
+          echo "Main file found: $MAIN_FILE"
+          if [ -z "$MAIN_FILE" ]; then MAIN_FILE="main.py"; fi
 
-          echo "=== Deploy to /opt/instadesk ==="
           sudo mkdir -p /opt/instadesk
           sudo rsync -av --exclude='.git' --exclude='node_modules'./ /opt/instadesk/ --delete
 
-          echo "=== Create systemd service if not exists ==="
-          if [! -f "/etc/systemd/system/instadesk.service" ]; then
-            sudo tee /etc/systemd/system/instadesk.service > /dev/null << 'SERVICE'
+          echo "=== CREATE SERVICE ==="
+          sudo tee /etc/systemd/system/instadesk.service > /dev/null << SERVICE
           [Unit]
           Description=InstaDesk Backend
           After=network.target
           [Service]
           Type=simple
           WorkingDirectory=/opt/instadesk
-          ExecStart=/usr/bin/python3 /opt/instadesk/backend/main.py
+          ExecStart=/usr/bin/python3 /opt/instadesk/$MAIN_FILE
           Restart=always
           User=root
           Environment=PYTHONUNBUFFERED=1
           [Install]
           WantedBy=multi-user.target
           SERVICE
-            sudo systemctl daemon-reload
-            sudo systemctl enable instadesk
-          fi
 
-          echo "=== Restart backend ==="
-          sudo systemctl restart instadesk || sudo systemctl start instadesk || true
+          sudo systemctl daemon-reload
+          sudo systemctl enable instadesk
+          sudo systemctl restart instadesk || sudo systemctl start instadesk
           sleep 3
-          sudo systemctl status instadesk --no-pager | head -30 || true
+          sudo systemctl status instadesk --no-pager | tail -30
+          sudo journalctl -u instadesk -n 50 --no-pager || true
 
-      - name: Connect Nginx + Auto SSL
+      - name: Connect Nginx + SSL
         run: |
-          set -e
-          echo "=== Nginx config ==="
           sudo cat > /etc/nginx/sites-available/instadesk << 'NG'
           server {
               listen 80;
@@ -72,16 +58,7 @@ jobs:
           }
           NG
           sudo ln -sf /etc/nginx/sites-available/instadesk /etc/nginx/sites-enabled/instadesk
-          sudo nginx -t
-          sudo systemctl reload nginx
-
-          echo "=== SSL ==="
-          sudo apt update && sudo apt install certbot python3-certbot-nginx -y || true
-          sudo certbot --nginx -d instar.xrocket.kr --non-interactive --agree-tos -m admin@xrocket.kr --redirect || echo "certbot will retry next run"
           sudo nginx -t && sudo systemctl reload nginx
-          echo "Deploy OK"
-
-      - name: Health Check
-        run: |
-          curl -s http://127.0.0.1:8000/ | head -20 || true
-          sudo certbot certificates || true
+          sudo apt install certbot python3-certbot-nginx -y || true
+          sudo certbot --nginx -d instar.xrocket.kr --non-interactive --agree-tos -m admin@xrocket.kr --redirect || true
+          sudo systemctl reload nginx
