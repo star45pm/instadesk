@@ -1,79 +1,44 @@
-name: STAR45 Deploy - InstaDesk
+name: deploy
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy - Auto Find Main
+
+      - name: Build Frontend
+        working-directory: frontend
         run: |
-          set -e
-          echo "=== SYNC ==="
-          sudo mkdir -p /opt/instadesk
-          sudo rsync -av --exclude='.git' --exclude='node_modules'./ /opt/instadesk/ --delete
-          echo "=== STRUCTURE ==="
-          find /opt/instadesk -maxdepth 4 -type f -name "*.py" | head -30
-          ls -la /opt/instadesk/
+          npm ci
+          npm run build
+          sudo rm -rf /var/www/instar/*
+          sudo mkdir -p /var/www/instar
+          sudo cp -r dist/* /var/www/instar/
+          sudo chmod -R 755 /var/www/instar/
+          ls -lh /var/www/instar/
 
-          # main.py / app.py 실제 경로 찾기
-          REAL_MAIN=$(find /opt/instadesk -maxdepth 4 -type f -name "main.py" | head -1)
-          if [ -z "$REAL_MAIN" ]; then REAL_MAIN=$(find /opt/instadesk -maxdepth 4 -type f -name "app.py" | head -1); fi
-          echo "REAL_MAIN=$REAL_MAIN"
-
-          REAL_DIR=$(dirname "$REAL_MAIN")
-          REAL_FILE=$(basename "$REAL_MAIN")
-          MODULE=$(echo "$REAL_FILE" | sed 's/.py//')
-          echo "DIR=$REAL_DIR MODULE=$MODULE"
-
-          pip3 install fastapi uvicorn -q || true
-          [ -f /opt/instadesk/requirements.txt ] && pip3 install -r /opt/instadesk/requirements.txt -q || true
-          [ -f /opt/instadesk/backend/requirements.txt ] && pip3 install -r /opt/instadesk/backend/requirements.txt -q || true
-          [ -f $REAL_DIR/requirements.txt ] && pip3 install -r $REAL_DIR/requirements.txt -q || true
-
-          echo "=== CREATE SERVICE with $REAL_DIR/$MODULE ==="
-          sudo tee /etc/systemd/system/instadesk.service > /dev/null << SERVICE
-          [Unit]
-          Description=InstaDesk Backend
-          After=network.target
-          [Service]
-          Type=simple
-          WorkingDirectory=$REAL_DIR
-          ExecStart=/usr/local/bin/uvicorn $MODULE:app --host 0.0.0.0 --port 8000 --app-dir $REAL_DIR
-          Restart=always
-          RestartSec=3
-          User=root
-          Environment=PYTHONUNBUFFERED=1
-          [Install]
-          WantedBy=multi-user.target
-          SERVICE
-
-          sudo systemctl daemon-reload
-          sudo systemctl enable instadesk
-          sudo systemctl restart instadesk
-          sleep 5
-          sudo systemctl status instadesk --no-pager
-          sudo journalctl -u instadesk -n 100 --no-pager
-          ss -tlnp | grep 8000 || echo "8000 not listening yet"
-          curl -s http://127.0.0.1:8000/ || curl -s http://127.0.0.1:8000/docs || echo "checking..."
-
-      - name: Nginx + SSL
+      - name: Fix Nginx /api proxy - final one shot
         run: |
-          sudo cat > /etc/nginx/sites-available/instadesk << 'NG'
-          server {
-              listen 80;
-              server_name instar.xrocket.kr;
-              location / {
-                  proxy_pass http://127.0.0.1:8000;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  proxy_set_header X-Forwarded-Proto $scheme;
-              }
-          }
-          NG
-          sudo ln -sf /etc/nginx/sites-available/instadesk /etc/nginx/sites-enabled/instadesk
-          sudo nginx -t && sudo systemctl reload nginx
-          sudo certbot --nginx -d instar.xrocket.kr --non-interactive --agree-tos -m admin@xrocket.kr --redirect || true
+          cat /etc/nginx/sites-available/instar.xrocket.kr | grep -n "location.*api" -A2 || true
+          # 중복 rewrite 제거
+          sudo sed -i '/rewrite ^\/api/d' /etc/nginx/sites-available/instar.xrocket.kr
+          # 정규식 location에서도 동작하는 rewrite 추가
+          sudo sed -i '/location.*\/api\//a \ rewrite ^/api/(.*)$ /$1 break;' /etc/nginx/sites-available/instar.xrocket.kr
+          # proxy_pass는 URI 없이 유지 (정규식 에러 방지)
+          sudo sed -i 's|proxy_pass http://127.0.0.1:8000/;|proxy_pass http://127.0.0.1:8000;|' /etc/nginx/sites-available/instar.xrocket.kr
+          sudo nginx -t
+          sudo systemctl reload nginx
+          echo "=== backend direct ==="
+          curl -s http://127.0.0.1:8000/; echo
+          echo "=== via nginx /api/ ==="
+          curl -k -s https://instar.xrocket.kr/api/; echo
+
+      - name: Restart Backend and Health Check
+        run: |
+          sudo systemctl restart instadesk || true
+          sleep 3
+          curl -f http://127.0.0.1:8000/ || true
+          curl -f http://127.0.0.1:8000/ && echo "backend ok"
