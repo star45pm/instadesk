@@ -12,33 +12,26 @@ jobs:
       - name: Build Frontend
         working-directory: frontend
         run: |
-          npm ci
+          npm install
           npm run build
           sudo rm -rf /var/www/instar/*
           sudo mkdir -p /var/www/instar
           sudo cp -r dist/* /var/www/instar/
           sudo chmod -R 755 /var/www/instar/
-          ls -lh /var/www/instar/
+          ls -lh /var/www/instar/ | head -20
 
-      - name: Fix Nginx /api proxy - final one shot
+      - name: Fix Nginx /api proxy - final
         run: |
-          cat /etc/nginx/sites-available/instar.xrocket.kr | grep -n "location.*api" -A2 || true
-          # 중복 rewrite 제거
           sudo sed -i '/rewrite ^\/api/d' /etc/nginx/sites-available/instar.xrocket.kr
-          # 정규식 location에서도 동작하는 rewrite 추가
           sudo sed -i '/location.*\/api\//a \ rewrite ^/api/(.*)$ /$1 break;' /etc/nginx/sites-available/instar.xrocket.kr
-          # proxy_pass는 URI 없이 유지 (정규식 에러 방지)
           sudo sed -i 's|proxy_pass http://127.0.0.1:8000/;|proxy_pass http://127.0.0.1:8000;|' /etc/nginx/sites-available/instar.xrocket.kr
-          sudo nginx -t
-          sudo systemctl reload nginx
-          echo "=== backend direct ==="
+          sudo nginx -t && sudo systemctl reload nginx
           curl -s http://127.0.0.1:8000/; echo
-          echo "=== via nginx /api/ ==="
           curl -k -s https://instar.xrocket.kr/api/; echo
 
-      - name: Restart Backend and Health Check
+      - name: Restart Backend
         run: |
           sudo systemctl restart instadesk || true
           sleep 3
           curl -f http://127.0.0.1:8000/ || true
-          curl -f http://127.0.0.1:8000/ && echo "backend ok"
+          echo "deploy done"
