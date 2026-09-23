@@ -8,27 +8,42 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - name: Build and Deploy
+      - name: Deploy - Auto Find Main
         run: |
           set -e
-          echo "=== FIND MAIN FILE ==="
-          MAIN_FILE=$(find. -maxdepth 3 -type f -name "main.py" -o -name "app.py" | head -1)
-          echo "Main file found: $MAIN_FILE"
-          if [ -z "$MAIN_FILE" ]; then MAIN_FILE="main.py"; fi
-
+          echo "=== SYNC ==="
           sudo mkdir -p /opt/instadesk
           sudo rsync -av --exclude='.git' --exclude='node_modules'./ /opt/instadesk/ --delete
+          echo "=== STRUCTURE ==="
+          find /opt/instadesk -maxdepth 4 -type f -name "*.py" | head -30
+          ls -la /opt/instadesk/
 
-          echo "=== CREATE SERVICE ==="
+          # main.py / app.py 실제 경로 찾기
+          REAL_MAIN=$(find /opt/instadesk -maxdepth 4 -type f -name "main.py" | head -1)
+          if [ -z "$REAL_MAIN" ]; then REAL_MAIN=$(find /opt/instadesk -maxdepth 4 -type f -name "app.py" | head -1); fi
+          echo "REAL_MAIN=$REAL_MAIN"
+
+          REAL_DIR=$(dirname "$REAL_MAIN")
+          REAL_FILE=$(basename "$REAL_MAIN")
+          MODULE=$(echo "$REAL_FILE" | sed 's/.py//')
+          echo "DIR=$REAL_DIR MODULE=$MODULE"
+
+          pip3 install fastapi uvicorn -q || true
+          [ -f /opt/instadesk/requirements.txt ] && pip3 install -r /opt/instadesk/requirements.txt -q || true
+          [ -f /opt/instadesk/backend/requirements.txt ] && pip3 install -r /opt/instadesk/backend/requirements.txt -q || true
+          [ -f $REAL_DIR/requirements.txt ] && pip3 install -r $REAL_DIR/requirements.txt -q || true
+
+          echo "=== CREATE SERVICE with $REAL_DIR/$MODULE ==="
           sudo tee /etc/systemd/system/instadesk.service > /dev/null << SERVICE
           [Unit]
           Description=InstaDesk Backend
           After=network.target
           [Service]
           Type=simple
-          WorkingDirectory=/opt/instadesk
-          ExecStart=/usr/bin/python3 /opt/instadesk/$MAIN_FILE
+          WorkingDirectory=$REAL_DIR
+          ExecStart=/usr/local/bin/uvicorn $MODULE:app --host 0.0.0.0 --port 8000 --app-dir $REAL_DIR
           Restart=always
+          RestartSec=3
           User=root
           Environment=PYTHONUNBUFFERED=1
           [Install]
@@ -37,12 +52,14 @@ jobs:
 
           sudo systemctl daemon-reload
           sudo systemctl enable instadesk
-          sudo systemctl restart instadesk || sudo systemctl start instadesk
-          sleep 3
-          sudo systemctl status instadesk --no-pager | tail -30
-          sudo journalctl -u instadesk -n 50 --no-pager || true
+          sudo systemctl restart instadesk
+          sleep 5
+          sudo systemctl status instadesk --no-pager
+          sudo journalctl -u instadesk -n 100 --no-pager
+          ss -tlnp | grep 8000 || echo "8000 not listening yet"
+          curl -s http://127.0.0.1:8000/ || curl -s http://127.0.0.1:8000/docs || echo "checking..."
 
-      - name: Connect Nginx + SSL
+      - name: Nginx + SSL
         run: |
           sudo cat > /etc/nginx/sites-available/instadesk << 'NG'
           server {
@@ -59,6 +76,4 @@ jobs:
           NG
           sudo ln -sf /etc/nginx/sites-available/instadesk /etc/nginx/sites-enabled/instadesk
           sudo nginx -t && sudo systemctl reload nginx
-          sudo apt install certbot python3-certbot-nginx -y || true
           sudo certbot --nginx -d instar.xrocket.kr --non-interactive --agree-tos -m admin@xrocket.kr --redirect || true
-          sudo systemctl reload nginx
