@@ -16,9 +16,8 @@ jobs:
           sudo mkdir -p /var/www/instar
           sudo cp -r dist/* /var/www/instar/
           sudo chmod -R 755 /var/www/instar/
-      - name: Overwrite Nginx FINAL
+      - name: Nginx and Backend
         run: |
-          set +e
           sudo tee /etc/nginx/sites-available/instar.xrocket.kr > /dev/null <<'NGINX'
           server {
               listen 80;
@@ -45,13 +44,9 @@ jobs:
               }
           }
           NGINX
-          sudo cp /etc/nginx/sites-available/instar.xrocket.kr /etc/nginx/sites-enabled/instar.xrocket.kr || true
           sudo ln -sf /etc/nginx/sites-available/instar.xrocket.kr /etc/nginx/sites-enabled/instar.xrocket.kr
           sudo nginx -t
           sudo systemctl reload nginx
-          sudo systemctl restart instadesk || true
+          sudo systemctl restart instadesk
           sleep 2
-          curl -s http://127.0.0.1:8000/ || true
-          curl -k -s https://instar.xrocket.kr/api || true
-          curl -k -s https://instar.xrocket.kr/api/ || true
           echo "DEPLOY DONE"
