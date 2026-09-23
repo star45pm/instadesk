@@ -16,7 +16,7 @@ jobs:
           sudo mkdir -p /var/www/instar
           sudo cp -r dist/* /var/www/instar/
           sudo chmod -R 755 /var/www/instar/
-      - name: Overwrite Nginx Config - FIX SLASH BUG
+      - name: Overwrite Nginx FINAL - both files
         run: |
           sudo tee /etc/nginx/sites-available/instar.xrocket.kr > /dev/null <<'NGINX'
           server {
@@ -44,17 +44,17 @@ jobs:
               }
           }
           NGINX
+          # 중요: enabled도 같은 파일로 덮고 심볼릭 링크 재설정
+          sudo cp /etc/nginx/sites-available/instar.xrocket.kr /etc/nginx/sites-enabled/instar.xrocket.kr 2>/dev/null || true
+          sudo ln -sf /etc/nginx/sites-available/instar.xrocket.kr /etc/nginx/sites-enabled/instar.xrocket.kr
           sudo nginx -t
           sudo systemctl reload nginx
-          echo "--- direct ---"
-          curl -s http://127.0.0.1:8000/ || true
-          echo ""
-          echo "--- /api ---"
-          curl -k -s https://instar.xrocket.kr/api || true
-          echo ""
-          echo "--- /api/ ---"
-          curl -k -s https://instar.xrocket.kr/api/ || true
-          echo ""
+          echo "=== NGINX EFFECTIVE CONFIG ==="
+          sudo nginx -T 2>&1 | grep -A 25 "instar.xrocket.kr" || true
+          echo "=== CHECKS ==="
+          curl -s http://127.0.0.1:8000/; echo
+          curl -k -s https://instar.xrocket.kr/api; echo
+          curl -k -s https://instar.xrocket.kr/api/; echo
       - name: Restart Backend
         run: |
           sudo systemctl restart instadesk || true
